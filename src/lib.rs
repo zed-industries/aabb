@@ -34,10 +34,10 @@ impl<T: Clone> AabbTree<T> {
             ..
         } = &self.nodes[index]
         {
-            let area = node_aabb.get().merge(&self.nodes[new_node].aabb());
+            let area = node_aabb.get().merge(self.nodes[new_node].aabb());
 
-            let left_cost = area.merge(&self.nodes[*left].aabb()).half_perimeter();
-            let right_cost = area.merge(&self.nodes[*right].aabb()).half_perimeter();
+            let left_cost = area.merge(self.nodes[*left].aabb()).half_perimeter();
+            let right_cost = area.merge(self.nodes[*right].aabb()).half_perimeter();
 
             // Descend to the best-fit child, based on which one would increase
             // the surface area the least. This attempts to keep the tree balanced
@@ -145,7 +145,7 @@ impl<T: Clone> AabbTree<T> {
     }
 
     fn push_internal(&mut self, parent: Option<usize>, left: usize, right: usize) -> usize {
-        let new_aabb = self.nodes[left].aabb().merge(&self.nodes[right].aabb());
+        let new_aabb = self.nodes[left].aabb().merge(self.nodes[right].aabb());
         self.nodes.push(Node::Internal {
             parent,
             aabb: Cell::new(new_aabb),
@@ -173,9 +173,9 @@ impl<T: Clone> AabbTree<T> {
             };
 
             // Update the AABB in the current node to include its children's AABBs.
-            let left_aabb = self.nodes[*left].aabb().clone();
-            let right_aabb = self.nodes[*right].aabb().clone();
-            aabb.set(left_aabb.merge(&right_aabb));
+            let left_aabb = self.nodes[*left].aabb();
+            let right_aabb = self.nodes[*right].aabb();
+            aabb.set(left_aabb.merge(right_aabb));
 
             // Move up to the parent.
             node = *parent;
@@ -190,7 +190,7 @@ pub struct Aabb {
 }
 
 impl Aabb {
-    fn merge(&self, other: &Aabb) -> Aabb {
+    fn merge(self, other: Aabb) -> Aabb {
         Aabb {
             min: Point {
                 x: self.min.x.min(other.min.x),
@@ -249,7 +249,7 @@ impl<T> Node<T> {
 
     fn aabb(&self) -> Aabb {
         match self {
-            Node::Leaf { aabb, .. } => aabb.clone(),
+            Node::Leaf { aabb, .. } => *aabb,
             Node::Internal { aabb, .. } => aabb.get(),
         }
     }
