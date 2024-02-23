@@ -1,30 +1,50 @@
 use std::cell::Cell;
 
-struct AabbTree<T> {
+pub struct AabbTree<T> {
     root: Option<usize>,
     nodes: Vec<Node<T>>,
 }
 
-impl<T> AabbTree<T> {
-    pub fn insert_object(&mut self, aabb: Aabb, key: T) {
-        let new_node = self.push_leaf(aabb, key);
+impl<T: Clone> AabbTree<T> {
+    pub fn new() -> Self {
+        AabbTree {
+            root: None,
+            nodes: Vec::new(),
+        }
+    }
+
+    pub fn insert(&mut self, aabb: Aabb, key: T) -> Vec<T> {
+        let new_node = self.push_leaf(aabb.clone(), key.clone());
+        let mut intersections = Vec::new();
 
         // If the tree is empty, make the root the new leaf.
         if self.root.is_none() {
             self.root = Some(new_node);
-            return;
+            dbg!();
+            return intersections;
         }
 
         // Search for the best place to add the new leaf based on heuristics.
         let mut index = self.root.unwrap();
         while let Node::Internal {
-            left, right, aabb, ..
+            left,
+            right,
+            aabb: node_aabb,
+            ..
         } = &self.nodes[index]
         {
-            let area = aabb.get().merge(&self.nodes[new_node].aabb());
+            let area = node_aabb.get().merge(&self.nodes[new_node].aabb());
 
             let left_cost = area.merge(&self.nodes[*left].aabb()).half_perimeter();
             let right_cost = area.merge(&self.nodes[*right].aabb()).half_perimeter();
+
+            // If there is an intersection with either child, add their keys to the intersections vector.
+            if area.intersects(&self.nodes[*left].aabb()) {
+                self.collect_intersections(*left, &aabb, &mut intersections);
+            }
+            if area.intersects(&self.nodes[*right].aabb()) {
+                self.collect_intersections(*right, &aabb, &mut intersections);
+            }
 
             // Descend to the best-fit child, based on which one would increase
             // the surface area the least. This attempts to keep the tree balanced
@@ -39,6 +59,20 @@ impl<T> AabbTree<T> {
         // We've found a leaf ('index' now refers to a leaf node).
         // We'll insert a new parent node above the leaf and attach our new leaf to it.
         let sibling = index;
+
+        // Check for collision with the located leaf node
+        let Node::Leaf {
+            aabb: leaf_aabb,
+            data,
+            ..
+        } = &self.nodes[index]
+        else {
+            unreachable!();
+        };
+        if leaf_aabb.intersects(&aabb) {
+            intersections.push(data.clone());
+        }
+
         let old_parent = self.nodes[sibling].parent();
         let new_parent = self.push_internal(old_parent, sibling, new_node);
 
@@ -49,17 +83,40 @@ impl<T> AabbTree<T> {
             };
 
             if *left == sibling {
+                dbg!();
                 *left = new_parent;
             } else {
+                dbg!();
                 *right = new_parent;
             }
         } else {
-            // If this was the root, the new parent is the new root.
+            dbg!();
+            // If the old parent was the root, the new parent is the new root.
             self.root = Some(new_parent);
         }
 
         // Walk up the tree fixing heights and areas.
         self.fix_abbs_upwards(new_parent);
+
+        intersections
+    }
+
+    fn collect_intersections(&self, index: usize, aabb: &Aabb, intersections: &mut Vec<T>) {
+        match &self.nodes[index] {
+            Node::Leaf {
+                data,
+                aabb: leaf_aabb,
+                ..
+            } => {
+                if aabb.intersects(leaf_aabb) {
+                    intersections.push(data.clone());
+                }
+            }
+            Node::Internal { left, right, .. } => {
+                self.collect_intersections(*left, aabb, intersections);
+                self.collect_intersections(*right, aabb, intersections);
+            }
+        }
     }
 
     fn push_leaf(&mut self, aabb: Aabb, data: T) -> usize {
@@ -109,6 +166,42 @@ impl<T> AabbTree<T> {
     }
 }
 
+#[derive(Default, Clone, Copy)]
+pub struct Aabb {
+    min: Point,
+    max: Point,
+}
+
+impl Aabb {
+    fn merge(&self, other: &Aabb) -> Aabb {
+        Aabb {
+            min: Point {
+                x: self.min.x.min(other.min.x),
+                y: self.min.y.min(other.min.y),
+            },
+            max: Point {
+                x: self.max.x.max(other.max.x),
+                y: self.max.y.max(other.max.y),
+            },
+        }
+    }
+
+    fn intersects(&self, other: &Aabb) -> bool {
+        dbg!(
+            !(self.min.x > other.max.x
+                || self.max.x < other.min.x
+                || self.min.y > other.max.y
+                || self.max.y < other.min.y)
+        )
+    }
+
+    fn half_perimeter(&self) -> f32 {
+        let width = self.max.x - self.min.x;
+        let height = self.max.y - self.min.y;
+        width + height
+    }
+}
+
 enum Node<T> {
     Leaf {
         parent: Option<usize>,
@@ -138,22 +231,6 @@ impl<T> Node<T> {
         }
     }
 
-    fn set_left(&mut self, new_left: usize) {
-        if let Node::Internal { left, .. } = self {
-            *left = new_left;
-        } else {
-            panic!("called set_left on a leaf node")
-        }
-    }
-
-    fn set_right(&mut self, new_right: usize) {
-        if let Node::Internal { right, .. } = self {
-            *right = new_right;
-        } else {
-            panic!("called set_right on a leaf node")
-        }
-    }
-
     fn aabb(&self) -> Aabb {
         match self {
             Node::Leaf { aabb, .. } => aabb.clone(),
@@ -163,34 +240,40 @@ impl<T> Node<T> {
 }
 
 #[derive(Default, Clone, Copy)]
-struct Aabb {
-    min: Point,
-    max: Point,
-}
-
-impl Aabb {
-    fn merge(&self, other: &Aabb) -> Aabb {
-        Aabb {
-            min: Point {
-                x: self.min.x.min(other.min.x),
-                y: self.min.y.min(other.min.y),
-            },
-            max: Point {
-                x: self.max.x.max(other.max.x),
-                y: self.max.y.max(other.max.y),
-            },
-        }
-    }
-
-    fn half_perimeter(&self) -> f32 {
-        let width = self.max.x - self.min.x;
-        let height = self.max.y - self.min.y;
-        width + height
-    }
-}
-
-#[derive(Default, Clone, Copy)]
 struct Point {
     x: f32,
     y: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_aabb_insertion_with_two_aabbs() {
+        let mut tree = AabbTree::new();
+        let aabb1 = Aabb {
+            min: Point { x: 0.0, y: 0.0 },
+            max: Point { x: 10.0, y: 10.0 },
+        };
+        let aabb2 = Aabb {
+            min: Point { x: 5.0, y: 5.0 },
+            max: Point { x: 15.0, y: 15.0 },
+        };
+
+        // Insert the first AABB.
+        let intersections = tree.insert(aabb1, "AABB1".to_string());
+        assert!(
+            intersections.is_empty(),
+            "There should be no intersections after inserting the first AABB."
+        );
+
+        // Insert the second AABB, which overlaps with the first.
+        let intersections = tree.insert(aabb2, "AABB2".to_string());
+        assert_eq!(
+            intersections,
+            vec!["AABB1".to_string()],
+            "There should be an intersection with the first AABB."
+        );
+    }
 }
