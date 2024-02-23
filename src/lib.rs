@@ -24,6 +24,7 @@ impl<T: Clone> AabbTree<T> {
         }
 
         // Search for the best place to add the new leaf based on heuristics.
+        let mut old_parent = None;
         let mut index = self.root.unwrap();
         while let Node::Internal {
             left,
@@ -35,14 +36,15 @@ impl<T: Clone> AabbTree<T> {
             let left = *left;
             let right = *right;
             *node_aabb = node_aabb.merge(new_aabb);
+            old_parent = Some(index);
 
             // Descend to the best-fit child, based on which one would increase
             // the surface area the least. This attempts to keep the tree balanced
             // in terms of surface area. If there is an intersection with the other child,
             // add its keys to the intersections vector.
-            let left_area = new_aabb.merge(self.nodes[left].aabb());
-            let right_area = new_aabb.merge(self.nodes[right].aabb());
-            if left_area.half_perimeter() < right_area.half_perimeter() {
+            let left_cost = new_aabb.merge(self.nodes[left].aabb()).half_perimeter();
+            let right_cost = new_aabb.merge(self.nodes[right].aabb()).half_perimeter();
+            if left_cost < right_cost {
                 self.collect_intersections(right, new_aabb, intersections);
                 index = left;
             } else {
@@ -68,8 +70,7 @@ impl<T: Clone> AabbTree<T> {
             intersections.push(data.clone());
         }
 
-        let old_parent = self.nodes[sibling].parent();
-        let new_parent = self.push_internal(old_parent, sibling, new_node);
+        let new_parent = self.push_internal(sibling, new_node);
 
         // If there was an old parent, we need to update its children indices.
         if let Some(old_parent) = old_parent {
@@ -133,26 +134,18 @@ impl<T: Clone> AabbTree<T> {
     }
 
     fn push_leaf(&mut self, aabb: Aabb, data: T) -> usize {
-        self.nodes.push(Node::Leaf {
-            parent: None,
-            aabb,
-            data,
-        });
+        self.nodes.push(Node::Leaf { aabb, data });
         self.nodes.len() - 1
     }
 
-    fn push_internal(&mut self, parent: Option<usize>, left: usize, right: usize) -> usize {
+    fn push_internal(&mut self, left: usize, right: usize) -> usize {
         let new_aabb = self.nodes[left].aabb().merge(self.nodes[right].aabb());
         self.nodes.push(Node::Internal {
-            parent,
             aabb: new_aabb,
             left,
             right,
         });
-        let new_parent = self.nodes.len() - 1;
-        self.nodes[left].set_parent(Some(new_parent));
-        self.nodes[right].set_parent(Some(new_parent));
-        new_parent
+        self.nodes.len() - 1
     }
 }
 
@@ -193,12 +186,10 @@ impl Aabb {
 #[derive(Debug)]
 enum Node<T> {
     Leaf {
-        parent: Option<usize>,
         aabb: Aabb,
         data: T,
     },
     Internal {
-        parent: Option<usize>,
         left: usize,
         right: usize,
         aabb: Aabb,
@@ -206,20 +197,6 @@ enum Node<T> {
 }
 
 impl<T> Node<T> {
-    fn parent(&self) -> Option<usize> {
-        match self {
-            Node::Leaf { parent, .. } | Node::Internal { parent, .. } => *parent,
-        }
-    }
-
-    fn set_parent(&mut self, new_parent: Option<usize>) {
-        match self {
-            Node::Leaf { parent, .. } | Node::Internal { parent, .. } => {
-                *parent = new_parent;
-            }
-        }
-    }
-
     fn aabb(&self) -> Aabb {
         match self {
             Node::Leaf { aabb, .. } => *aabb,
