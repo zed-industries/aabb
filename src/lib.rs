@@ -1,5 +1,7 @@
 use std::cell::Cell;
+use std::{fmt, iter};
 
+#[derive(Debug)]
 pub struct AabbTree<T> {
     root: Option<usize>,
     nodes: Vec<Node<T>>,
@@ -68,7 +70,6 @@ impl<T: Clone> AabbTree<T> {
             unreachable!();
         };
         if leaf_aabb.intersects(&aabb) {
-            dbg!();
             intersections.push(data.clone());
         }
 
@@ -97,6 +98,25 @@ impl<T: Clone> AabbTree<T> {
         intersections
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (Aabb, &T)> {
+        let mut stack = Vec::new();
+        stack.extend(self.root);
+        iter::from_fn(move || {
+            while let Some(node_ix) = stack.pop() {
+                match &self.nodes[node_ix] {
+                    Node::Leaf { aabb, data, .. } => {
+                        return Some((*aabb, data));
+                    }
+                    Node::Internal { left, right, .. } => {
+                        stack.push(*left);
+                        stack.push(*right);
+                    }
+                }
+            }
+            None
+        })
+    }
+
     fn collect_intersections(&self, index: usize, aabb: &Aabb, intersections: &mut Vec<T>) {
         match &self.nodes[index] {
             Node::Leaf {
@@ -105,7 +125,6 @@ impl<T: Clone> AabbTree<T> {
                 ..
             } => {
                 if aabb.intersects(leaf_aabb) {
-                    dbg!();
                     intersections.push(data.clone());
                 }
             }
@@ -127,15 +146,16 @@ impl<T: Clone> AabbTree<T> {
 
     fn push_internal(&mut self, parent: Option<usize>, left: usize, right: usize) -> usize {
         let new_aabb = self.nodes[left].aabb().merge(&self.nodes[right].aabb());
-        self.nodes[left].set_parent(parent);
-        self.nodes[right].set_parent(parent);
         self.nodes.push(Node::Internal {
             parent,
             aabb: Cell::new(new_aabb),
             left,
             right,
         });
-        self.nodes.len() - 1
+        let new_parent = self.nodes.len() - 1;
+        self.nodes[left].set_parent(Some(new_parent));
+        self.nodes[right].set_parent(Some(new_parent));
+        new_parent
     }
 
     fn fix_abbs_upwards(&mut self, node: usize) {
@@ -163,7 +183,7 @@ impl<T: Clone> AabbTree<T> {
     }
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Debug, Clone, Copy, PartialEq)]
 pub struct Aabb {
     min: Point,
     max: Point,
@@ -197,6 +217,7 @@ impl Aabb {
     }
 }
 
+#[derive(Debug)]
 enum Node<T> {
     Leaf {
         parent: Option<usize>,
@@ -234,15 +255,24 @@ impl<T> Node<T> {
     }
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, PartialEq)]
 struct Point {
     x: f32,
     y: f32,
 }
 
+impl fmt::Debug for Point {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "(x: {:.2}, y: {:.2})", self.x, self.y)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path};
+
     use super::*;
+    use rand::{Rng, SeedableRng};
 
     #[test]
     fn test_aabb_insertion_with_two_aabbs() {
@@ -272,20 +302,30 @@ mod tests {
         );
     }
 
-    use rand::{Rng, SeedableRng};
-
     #[test]
     fn test_random_iterations() {
+        let max_aabbs = 1000;
+
         for seed in 1..=10000 {
+            // let seed = 1;
+            let debug = false;
+            if debug {
+                let svg_path = Path::new("./svg");
+                if svg_path.exists() {
+                    fs::remove_dir_all("./svg").unwrap();
+                }
+                fs::create_dir_all("./svg").unwrap();
+            }
+
             dbg!(seed);
 
             let mut tree = AabbTree::new();
             let mut rng = rand::rngs::StdRng::seed_from_u64(seed as u64);
-            let mut aabbs: Vec<(Aabb, i32)> = Vec::new();
+            let mut expected_aabbs: Vec<(Aabb, usize)> = Vec::new();
 
             // Insert a random number of random AABBs into the tree.
-            let num_aabbs = rng.gen_range(1..=4);
-            for i in 0..num_aabbs {
+            let num_aabbs = rng.gen_range(1..=max_aabbs);
+            for key in 0..num_aabbs {
                 let min_x: f32 = rng.gen_range(-100.0..100.0);
                 let min_y: f32 = rng.gen_range(-100.0..100.0);
                 let max_x: f32 = rng.gen_range(min_x..min_x + 50.0);
@@ -294,30 +334,129 @@ mod tests {
                     min: Point { x: min_x, y: min_y },
                     max: Point { x: max_x, y: max_y },
                 };
-                let key = i; // Use an integer for the key
-                aabbs.push((aabb, key));
+
+                expected_aabbs.push((aabb, key));
+                if debug {
+                    println!("inserting {} with AABB: {:?}", key, aabb);
+                    draw_aabbs(
+                        format!("./svg/expected_aabbs_after_{}.svg", key),
+                        &expected_aabbs,
+                    );
+                }
 
                 // Insert the AABB into the tree and collect intersections.
                 let intersections = tree.insert(aabb, key);
+                if debug {
+                    draw_aabb_tree(format!("./svg/aabb_tree_after_{}.svg", key), &tree);
+                }
+
+                // Verify the tree contains all the AABBs.
+                let mut actual_aabbs = tree
+                    .iter()
+                    .map(|(aabb, key)| (aabb, *key))
+                    .collect::<Vec<_>>();
+                actual_aabbs.sort_by_key(|(_, key)| *key);
+                expected_aabbs.sort_by_key(|(_, key)| *key);
+                assert_eq!(actual_aabbs, expected_aabbs);
 
                 // Verify intersections by brute force comparison.
-                let mut expected_intersections: Vec<i32> = aabbs
+                let mut expected_intersections = expected_aabbs
                     .iter()
                     .filter(|(other_aabb, other_key)| {
                         aabb.intersects(other_aabb) && *other_key != key
                     })
                     .map(|(_, other_key)| *other_key)
-                    .collect();
+                    .collect::<Vec<_>>();
                 expected_intersections.sort_unstable();
 
                 let mut actual_intersections = intersections;
                 actual_intersections.sort_unstable();
 
-                assert_eq!(
-                    actual_intersections, expected_intersections,
-                    "The intersections returned by the tree do not match the expected intersections."
-                );
+                if actual_intersections != expected_intersections {
+                    assert_eq!(
+                        actual_intersections, expected_intersections,
+                        "The intersections returned by the tree do not match the expected intersections."
+                    );
+                }
             }
         }
+    }
+
+    fn draw_aabbs(svg_path: impl AsRef<Path>, aabbs: &[(Aabb, usize)]) {
+        let mut svg_content = String::from(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="800" height="800" viewBox="-100 -100 200 200" style="border:1px solid black;">"#,
+        );
+
+        for (aabb, key) in aabbs {
+            svg_content.push_str(&format!(
+                r#"<rect x="{}" y="{}" width="{}" height="{}" style="fill:none;stroke:black;stroke-width:1" />"#,
+                aabb.min.x,
+                aabb.min.y,
+                aabb.max.x - aabb.min.x,
+                aabb.max.y - aabb.min.y
+            ));
+            svg_content.push_str(&format!(
+                r#"<text x="{}" y="{}" font-size="3" text-anchor="middle" alignment-baseline="central">{}</text>"#,
+                (aabb.min.x + aabb.max.x) / 2.0,
+                (aabb.min.y + aabb.max.y) / 2.0,
+                key
+            ));
+        }
+
+        svg_content.push_str("</svg>");
+        fs::write(svg_path, &svg_content).unwrap();
+    }
+
+    fn draw_aabb_tree(svg_path: impl AsRef<Path>, tree: &AabbTree<usize>) {
+        let mut svg_content = String::from(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="800" height="800" viewBox="-100 -100 200 200" style="border:1px solid black;">"#,
+        );
+
+        fn draw_node<T: fmt::Debug>(svg_content: &mut String, nodes: &[Node<T>], index: usize) {
+            match &nodes[index] {
+                Node::Internal {
+                    aabb, left, right, ..
+                } => {
+                    let aabb = aabb.get();
+                    svg_content.push_str(&format!(
+                        r#"<rect x="{}" y="{}" width="{}" height="{}" style="fill:rgba({},{},{},0.5);stroke:rgba({},{},{},1);stroke-width:1" />"#,
+                        aabb.min.x,
+                        aabb.min.y,
+                        aabb.max.x - aabb.min.x,
+                        aabb.max.y - aabb.min.y,
+                        (index * 50) % 255, // Red component
+                        (index * 120) % 255, // Green component
+                        (index * 180) % 255, // Blue component
+                        (index * 50) % 255, // Red stroke
+                        (index * 120) % 255, // Green stroke
+                        (index * 180) % 255  // Blue stroke
+                    ));
+                    draw_node(svg_content, nodes, *left);
+                    draw_node(svg_content, nodes, *right);
+                }
+                Node::Leaf { aabb, data, .. } => {
+                    svg_content.push_str(&format!(
+                        r#"<rect x="{}" y="{}" width="{}" height="{}" style="fill:none;stroke:black;stroke-width:1" />"#,
+                        aabb.min.x,
+                        aabb.min.y,
+                        aabb.max.x - aabb.min.x,
+                        aabb.max.y - aabb.min.y
+                    ));
+                    svg_content.push_str(&format!(
+                        r#"<text x="{}" y="{}" font-size="3" text-anchor="middle" alignment-baseline="central">{:?}</text>"#,
+                        (aabb.min.x + aabb.max.x) / 2.0,
+                        (aabb.min.y + aabb.max.y) / 2.0,
+                        data
+                    ));
+                }
+            }
+        }
+
+        if let Some(root) = tree.root {
+            draw_node(&mut svg_content, &tree.nodes, root);
+        }
+
+        svg_content.push_str("</svg>");
+        fs::write(svg_path, &svg_content).unwrap();
     }
 }
