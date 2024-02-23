@@ -15,8 +15,8 @@ impl<T: Clone> AabbTree<T> {
         }
     }
 
-    pub fn insert(&mut self, aabb: Aabb, key: T) -> Vec<T> {
-        let new_node = self.push_leaf(aabb.clone(), key.clone());
+    pub fn insert(&mut self, new_aabb: Aabb, key: T) -> Vec<T> {
+        let new_node = self.push_leaf(new_aabb, key.clone());
         let mut intersections = Vec::new();
 
         // If the tree is empty, make the root the new leaf.
@@ -34,25 +34,21 @@ impl<T: Clone> AabbTree<T> {
             ..
         } = &self.nodes[index]
         {
-            let area = node_aabb.get().merge(self.nodes[new_node].aabb());
-
-            let left_cost = area.merge(self.nodes[*left].aabb()).half_perimeter();
-            let right_cost = area.merge(self.nodes[*right].aabb()).half_perimeter();
+            let left = *left;
+            let right = *right;
 
             // Descend to the best-fit child, based on which one would increase
             // the surface area the least. This attempts to keep the tree balanced
             // in terms of surface area. If there is an intersection with the other child,
             // add its keys to the intersections vector.
-            if left_cost < right_cost {
-                if area.intersects(&self.nodes[*right].aabb()) {
-                    self.collect_intersections(*right, &aabb, &mut intersections);
-                }
-                index = *left;
+            let left_area = new_aabb.merge(self.nodes[left].aabb());
+            let right_area = new_aabb.merge(self.nodes[right].aabb());
+            if left_area.half_perimeter() < right_area.half_perimeter() {
+                self.collect_intersections(right, new_aabb, &mut intersections);
+                index = left;
             } else {
-                if area.intersects(&self.nodes[*left].aabb()) {
-                    self.collect_intersections(*left, &aabb, &mut intersections);
-                }
-                index = *right;
+                self.collect_intersections(left, new_aabb, &mut intersections);
+                index = right;
             }
         }
 
@@ -69,7 +65,7 @@ impl<T: Clone> AabbTree<T> {
         else {
             unreachable!();
         };
-        if leaf_aabb.intersects(&aabb) {
+        if leaf_aabb.intersects(new_aabb) {
             intersections.push(data.clone());
         }
 
@@ -117,20 +113,27 @@ impl<T: Clone> AabbTree<T> {
         })
     }
 
-    fn collect_intersections(&self, index: usize, aabb: &Aabb, intersections: &mut Vec<T>) {
+    fn collect_intersections(&self, index: usize, aabb: Aabb, intersections: &mut Vec<T>) {
         match &self.nodes[index] {
             Node::Leaf {
                 data,
-                aabb: leaf_aabb,
+                aabb: node_aabb,
                 ..
             } => {
-                if aabb.intersects(leaf_aabb) {
+                if aabb.intersects(*node_aabb) {
                     intersections.push(data.clone());
                 }
             }
-            Node::Internal { left, right, .. } => {
-                self.collect_intersections(*left, aabb, intersections);
-                self.collect_intersections(*right, aabb, intersections);
+            Node::Internal {
+                left,
+                right,
+                aabb: node_aabb,
+                ..
+            } => {
+                if aabb.intersects(node_aabb.get()) {
+                    self.collect_intersections(*left, aabb, intersections);
+                    self.collect_intersections(*right, aabb, intersections);
+                }
             }
         }
     }
@@ -203,14 +206,14 @@ impl Aabb {
         }
     }
 
-    fn intersects(&self, other: &Aabb) -> bool {
+    fn intersects(self, other: Aabb) -> bool {
         !(self.min.x > other.max.x
             || self.max.x < other.min.x
             || self.min.y > other.max.y
             || self.max.y < other.min.y)
     }
 
-    fn half_perimeter(&self) -> f32 {
+    fn half_perimeter(self) -> f32 {
         let width = self.max.x - self.min.x;
         let height = self.max.y - self.min.y;
         width + height
@@ -363,7 +366,7 @@ mod tests {
                 let mut expected_intersections = expected_aabbs
                     .iter()
                     .filter(|(other_aabb, other_key)| {
-                        aabb.intersects(other_aabb) && *other_key != key
+                        aabb.intersects(*other_aabb) && *other_key != key
                     })
                     .map(|(_, other_key)| *other_key)
                     .collect::<Vec<_>>();
