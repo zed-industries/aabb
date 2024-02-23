@@ -14,14 +14,13 @@ impl<T: Clone> AabbTree<T> {
         }
     }
 
-    pub fn insert(&mut self, new_aabb: Aabb, key: T) -> Vec<T> {
+    pub fn insert(&mut self, new_aabb: Aabb, key: T, intersections: &mut Vec<T>) {
         let new_node = self.push_leaf(new_aabb, key.clone());
-        let mut intersections = Vec::new();
 
         // If the tree is empty, make the root the new leaf.
         if self.root.is_none() {
             self.root = Some(new_node);
-            return intersections;
+            return;
         }
 
         // Search for the best place to add the new leaf based on heuristics.
@@ -44,10 +43,10 @@ impl<T: Clone> AabbTree<T> {
             let left_area = new_aabb.merge(self.nodes[left].aabb());
             let right_area = new_aabb.merge(self.nodes[right].aabb());
             if left_area.half_perimeter() < right_area.half_perimeter() {
-                self.collect_intersections(right, new_aabb, &mut intersections);
+                self.collect_intersections(right, new_aabb, intersections);
                 index = left;
             } else {
-                self.collect_intersections(left, new_aabb, &mut intersections);
+                self.collect_intersections(left, new_aabb, intersections);
                 index = right;
             }
         }
@@ -87,8 +86,6 @@ impl<T: Clone> AabbTree<T> {
             // If the old parent was the root, the new parent is the new root.
             self.root = Some(new_parent);
         }
-
-        intersections
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (Aabb, &T)> {
@@ -263,14 +260,16 @@ mod tests {
         };
 
         // Insert the first AABB.
-        let intersections = tree.insert(aabb1, "AABB1".to_string());
+        let mut intersections = Vec::new();
+        tree.insert(aabb1, "AABB1".to_string(), &mut intersections);
         assert!(
             intersections.is_empty(),
             "There should be no intersections after inserting the first AABB."
         );
 
         // Insert the second AABB, which overlaps with the first.
-        let intersections = tree.insert(aabb2, "AABB2".to_string());
+        let mut intersections = Vec::new();
+        tree.insert(aabb2, "AABB2".to_string(), &mut intersections);
         assert_eq!(
             intersections,
             vec!["AABB1".to_string()],
@@ -282,6 +281,7 @@ mod tests {
     fn test_random_iterations() {
         let max_aabbs = 10;
 
+        let mut actual_intersections: Vec<usize> = Vec::new();
         for seed in 1..=10000 {
             // let seed = 1;
             let debug = false;
@@ -321,7 +321,8 @@ mod tests {
                 }
 
                 // Insert the AABB into the tree and collect intersections.
-                let intersections = tree.insert(aabb, key);
+                actual_intersections.clear();
+                tree.insert(aabb, key, &mut actual_intersections);
                 if debug {
                     draw_aabb_tree(format!("./svg/aabb_tree_after_{}.svg", key), &tree);
                 }
@@ -344,16 +345,11 @@ mod tests {
                     .map(|(_, other_key)| *other_key)
                     .collect::<Vec<_>>();
                 expected_intersections.sort_unstable();
-
-                let mut actual_intersections = intersections;
                 actual_intersections.sort_unstable();
-
-                if actual_intersections != expected_intersections {
-                    assert_eq!(
-                        actual_intersections, expected_intersections,
-                        "The intersections returned by the tree do not match the expected intersections."
-                    );
-                }
+                assert_eq!(
+                    actual_intersections, expected_intersections,
+                    "The intersections returned by the tree do not match the expected intersections."
+                );
             }
         }
     }
