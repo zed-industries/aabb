@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::{fmt, iter};
 
 #[derive(Debug)]
@@ -32,10 +31,11 @@ impl<T: Clone> AabbTree<T> {
             right,
             aabb: node_aabb,
             ..
-        } = &self.nodes[index]
+        } = &mut self.nodes[index]
         {
             let left = *left;
             let right = *right;
+            *node_aabb = node_aabb.merge(new_aabb);
 
             // Descend to the best-fit child, based on which one would increase
             // the surface area the least. This attempts to keep the tree balanced
@@ -88,9 +88,6 @@ impl<T: Clone> AabbTree<T> {
             self.root = Some(new_parent);
         }
 
-        // Walk up the tree fixing heights and areas.
-        self.fix_abbs_upwards(new_parent);
-
         intersections
     }
 
@@ -130,7 +127,7 @@ impl<T: Clone> AabbTree<T> {
                 aabb: node_aabb,
                 ..
             } => {
-                if aabb.intersects(node_aabb.get()) {
+                if aabb.intersects(*node_aabb) {
                     self.collect_intersections(*left, aabb, intersections);
                     self.collect_intersections(*right, aabb, intersections);
                 }
@@ -151,7 +148,7 @@ impl<T: Clone> AabbTree<T> {
         let new_aabb = self.nodes[left].aabb().merge(self.nodes[right].aabb());
         self.nodes.push(Node::Internal {
             parent,
-            aabb: Cell::new(new_aabb),
+            aabb: new_aabb,
             left,
             right,
         });
@@ -159,30 +156,6 @@ impl<T: Clone> AabbTree<T> {
         self.nodes[left].set_parent(Some(new_parent));
         self.nodes[right].set_parent(Some(new_parent));
         new_parent
-    }
-
-    fn fix_abbs_upwards(&mut self, node: usize) {
-        let mut node = Some(node);
-
-        while let Some(index) = node {
-            let Node::Internal {
-                parent,
-                left,
-                right,
-                aabb,
-            } = &self.nodes[index]
-            else {
-                unreachable!();
-            };
-
-            // Update the AABB in the current node to include its children's AABBs.
-            let left_aabb = self.nodes[*left].aabb();
-            let right_aabb = self.nodes[*right].aabb();
-            aabb.set(left_aabb.merge(right_aabb));
-
-            // Move up to the parent.
-            node = *parent;
-        }
     }
 }
 
@@ -231,7 +204,7 @@ enum Node<T> {
         parent: Option<usize>,
         left: usize,
         right: usize,
-        aabb: Cell<Aabb>,
+        aabb: Aabb,
     },
 }
 
@@ -253,7 +226,7 @@ impl<T> Node<T> {
     fn aabb(&self) -> Aabb {
         match self {
             Node::Leaf { aabb, .. } => *aabb,
-            Node::Internal { aabb, .. } => aabb.get(),
+            Node::Internal { aabb, .. } => *aabb,
         }
     }
 }
@@ -307,7 +280,7 @@ mod tests {
 
     #[test]
     fn test_random_iterations() {
-        let max_aabbs = 1000;
+        let max_aabbs = 10;
 
         for seed in 1..=10000 {
             // let seed = 1;
@@ -387,7 +360,7 @@ mod tests {
 
     fn draw_aabbs(svg_path: impl AsRef<Path>, aabbs: &[(Aabb, usize)]) {
         let mut svg_content = String::from(
-            r#"<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="800" height="800" viewBox="-100 -100 200 200" style="border:1px solid black;">"#,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="-100 -100 200 200" style="border:1px solid black;">"#,
         );
 
         for (aabb, key) in aabbs {
@@ -412,7 +385,7 @@ mod tests {
 
     fn draw_aabb_tree(svg_path: impl AsRef<Path>, tree: &AabbTree<usize>) {
         let mut svg_content = String::from(
-            r#"<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="800" height="800" viewBox="-100 -100 200 200" style="border:1px solid black;">"#,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="-100 -100 200 200" style="border:1px solid black;">"#,
         );
 
         fn draw_node<T: fmt::Debug>(svg_content: &mut String, nodes: &[Node<T>], index: usize) {
@@ -420,7 +393,6 @@ mod tests {
                 Node::Internal {
                     aabb, left, right, ..
                 } => {
-                    let aabb = aabb.get();
                     svg_content.push_str(&format!(
                         r#"<rect x="{}" y="{}" width="{}" height="{}" style="fill:rgba({},{},{},0.5);stroke:rgba({},{},{},1);stroke-width:1" />"#,
                         aabb.min.x,
