@@ -31,7 +31,7 @@ impl<T: Clone> AabbTree<T> {
             right,
             aabb: node_aabb,
             ..
-        } = &mut self.nodes[index]
+        } = self.node_mut(index)
         {
             let left = *left;
             let right = *right;
@@ -42,8 +42,8 @@ impl<T: Clone> AabbTree<T> {
             // the surface area the least. This attempts to keep the tree balanced
             // in terms of surface area. If there is an intersection with the other child,
             // add its keys to the intersections vector.
-            let left_cost = new_aabb.merge(self.nodes[left].aabb()).half_perimeter();
-            let right_cost = new_aabb.merge(self.nodes[right].aabb()).half_perimeter();
+            let left_cost = new_aabb.merge(self.node(left).aabb()).half_perimeter();
+            let right_cost = new_aabb.merge(self.node(right).aabb()).half_perimeter();
             if left_cost < right_cost {
                 self.collect_intersections(right, new_aabb, intersections);
                 index = left;
@@ -62,7 +62,7 @@ impl<T: Clone> AabbTree<T> {
             aabb: leaf_aabb,
             data,
             ..
-        } = &self.nodes[index]
+        } = self.node(index)
         else {
             unreachable!();
         };
@@ -74,7 +74,7 @@ impl<T: Clone> AabbTree<T> {
 
         // If there was an old parent, we need to update its children indices.
         if let Some(old_parent) = old_parent {
-            let Node::Internal { left, right, .. } = &mut self.nodes[old_parent] else {
+            let Node::Internal { left, right, .. } = self.node_mut(old_parent) else {
                 unreachable!();
             };
 
@@ -94,7 +94,7 @@ impl<T: Clone> AabbTree<T> {
         stack.extend(self.root);
         iter::from_fn(move || {
             while let Some(node_ix) = stack.pop() {
-                match &self.nodes[node_ix] {
+                match self.node(node_ix) {
                     Node::Leaf { aabb, data, .. } => {
                         return Some((*aabb, data));
                     }
@@ -109,7 +109,7 @@ impl<T: Clone> AabbTree<T> {
     }
 
     fn collect_intersections(&self, index: usize, aabb: Aabb, intersections: &mut Vec<T>) {
-        match &self.nodes[index] {
+        match self.node(index) {
             Node::Leaf {
                 data,
                 aabb: node_aabb,
@@ -139,13 +139,23 @@ impl<T: Clone> AabbTree<T> {
     }
 
     fn push_internal(&mut self, left: usize, right: usize) -> usize {
-        let new_aabb = self.nodes[left].aabb().merge(self.nodes[right].aabb());
+        let new_aabb = self.node(left).aabb().merge(self.node(right).aabb());
         self.nodes.push(Node::Internal {
             aabb: new_aabb,
             left,
             right,
         });
         self.nodes.len() - 1
+    }
+
+    #[inline(always)]
+    fn node(&self, index: usize) -> &Node<T> {
+        &self.nodes[index]
+    }
+
+    #[inline(always)]
+    fn node_mut(&mut self, index: usize) -> &mut Node<T> {
+        &mut self.nodes[index]
     }
 }
 
@@ -256,10 +266,10 @@ mod tests {
 
     #[test]
     fn test_random_iterations() {
-        let max_aabbs = 10;
+        let max_aabbs = 10000;
 
         let mut actual_intersections: Vec<usize> = Vec::new();
-        for seed in 1..=10000 {
+        for seed in 1..=1 {
             // let seed = 1;
             let debug = false;
             if debug {
@@ -275,6 +285,8 @@ mod tests {
             let mut tree = AabbTree::new();
             let mut rng = rand::rngs::StdRng::seed_from_u64(seed as u64);
             let mut expected_aabbs: Vec<(Aabb, usize)> = Vec::new();
+
+            let mut insert_time = std::time::Duration::ZERO;
 
             // Insert a random number of random AABBs into the tree.
             let num_aabbs = rng.gen_range(1..=max_aabbs);
@@ -299,7 +311,9 @@ mod tests {
 
                 // Insert the AABB into the tree and collect intersections.
                 actual_intersections.clear();
+                let t0 = std::time::Instant::now();
                 tree.insert(aabb, key, &mut actual_intersections);
+                insert_time += t0.elapsed();
                 if debug {
                     draw_aabb_tree(format!("./svg/aabb_tree_after_{}.svg", key), &tree);
                 }
@@ -328,6 +342,8 @@ mod tests {
                     "The intersections returned by the tree do not match the expected intersections."
                 );
             }
+
+            dbg!(insert_time);
         }
     }
 
