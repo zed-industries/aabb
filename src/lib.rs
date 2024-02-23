@@ -20,7 +20,6 @@ impl<T: Clone> AabbTree<T> {
         // If the tree is empty, make the root the new leaf.
         if self.root.is_none() {
             self.root = Some(new_node);
-            dbg!();
             return intersections;
         }
 
@@ -38,20 +37,19 @@ impl<T: Clone> AabbTree<T> {
             let left_cost = area.merge(&self.nodes[*left].aabb()).half_perimeter();
             let right_cost = area.merge(&self.nodes[*right].aabb()).half_perimeter();
 
-            // If there is an intersection with either child, add their keys to the intersections vector.
-            if area.intersects(&self.nodes[*left].aabb()) {
-                self.collect_intersections(*left, &aabb, &mut intersections);
-            }
-            if area.intersects(&self.nodes[*right].aabb()) {
-                self.collect_intersections(*right, &aabb, &mut intersections);
-            }
-
             // Descend to the best-fit child, based on which one would increase
             // the surface area the least. This attempts to keep the tree balanced
-            // in terms of surface area.
+            // in terms of surface area. If there is an intersection with the other child,
+            // add its keys to the intersections vector.
             if left_cost < right_cost {
+                if area.intersects(&self.nodes[*right].aabb()) {
+                    self.collect_intersections(*right, &aabb, &mut intersections);
+                }
                 index = *left;
             } else {
+                if area.intersects(&self.nodes[*left].aabb()) {
+                    self.collect_intersections(*left, &aabb, &mut intersections);
+                }
                 index = *right;
             }
         }
@@ -70,6 +68,7 @@ impl<T: Clone> AabbTree<T> {
             unreachable!();
         };
         if leaf_aabb.intersects(&aabb) {
+            dbg!();
             intersections.push(data.clone());
         }
 
@@ -83,14 +82,11 @@ impl<T: Clone> AabbTree<T> {
             };
 
             if *left == sibling {
-                dbg!();
                 *left = new_parent;
             } else {
-                dbg!();
                 *right = new_parent;
             }
         } else {
-            dbg!();
             // If the old parent was the root, the new parent is the new root.
             self.root = Some(new_parent);
         }
@@ -109,6 +105,7 @@ impl<T: Clone> AabbTree<T> {
                 ..
             } => {
                 if aabb.intersects(leaf_aabb) {
+                    dbg!();
                     intersections.push(data.clone());
                 }
             }
@@ -187,12 +184,10 @@ impl Aabb {
     }
 
     fn intersects(&self, other: &Aabb) -> bool {
-        dbg!(
-            !(self.min.x > other.max.x
-                || self.max.x < other.min.x
-                || self.min.y > other.max.y
-                || self.max.y < other.min.y)
-        )
+        !(self.min.x > other.max.x
+            || self.max.x < other.min.x
+            || self.min.y > other.max.y
+            || self.max.y < other.min.y)
     }
 
     fn half_perimeter(&self) -> f32 {
@@ -275,5 +270,54 @@ mod tests {
             vec!["AABB1".to_string()],
             "There should be an intersection with the first AABB."
         );
+    }
+
+    use rand::{Rng, SeedableRng};
+
+    #[test]
+    fn test_random_iterations() {
+        for seed in 1..=10000 {
+            dbg!(seed);
+
+            let mut tree = AabbTree::new();
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed as u64);
+            let mut aabbs: Vec<(Aabb, i32)> = Vec::new();
+
+            // Insert a random number of random AABBs into the tree.
+            let num_aabbs = rng.gen_range(1..=4);
+            for i in 0..num_aabbs {
+                let min_x: f32 = rng.gen_range(-100.0..100.0);
+                let min_y: f32 = rng.gen_range(-100.0..100.0);
+                let max_x: f32 = rng.gen_range(min_x..min_x + 50.0);
+                let max_y: f32 = rng.gen_range(min_y..min_y + 50.0);
+                let aabb = Aabb {
+                    min: Point { x: min_x, y: min_y },
+                    max: Point { x: max_x, y: max_y },
+                };
+                let key = i; // Use an integer for the key
+                aabbs.push((aabb, key));
+
+                // Insert the AABB into the tree and collect intersections.
+                let intersections = tree.insert(aabb, key);
+
+                // Verify intersections by brute force comparison.
+                let mut expected_intersections: Vec<i32> = aabbs
+                    .iter()
+                    .filter(|(other_aabb, other_key)| {
+                        aabb.intersects(other_aabb) && *other_key != key
+                    })
+                    .map(|(_, other_key)| *other_key)
+                    .collect();
+                expected_intersections.sort_unstable();
+
+                let mut actual_intersections = intersections;
+                actual_intersections.sort_unstable();
+
+                assert_eq!(
+                    actual_intersections, expected_intersections,
+                    "The intersections returned by the tree do not match the expected intersections."
+                );
+            }
+        }
     }
 }
